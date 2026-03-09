@@ -10,10 +10,10 @@ app.use(require('cors')({
 }));
 
 // --- PASO 1: SERVIR ARCHIVOS DE ANGULAR ---
-// Esta ruta debe coincidir con la carpeta que viste en dist
 const distPath = path.join(__dirname, 'dist', 'Youwnloader', 'browser');
 app.use(express.static(distPath));
 
+// Ajuste para multiplataforma: En Render (Linux) usamos el comando global
 const isWin = process.platform === 'win32';
 const ytdlpPath = isWin ? path.join(__dirname, 'bin', 'yt-dlp.exe') : 'yt-dlp';
 
@@ -53,12 +53,15 @@ app.post('/api/download', async (req, res) => {
     try {
         const cleanUrl = url.split('&list=')[0];
 
-        // FLAGS: Van directamente a la consola de yt-dlp
+        // FLAGS OPTIMIZADAS PARA STREAMING
         const flags = {
             format: formatOption,
             noPlaylist: true,
             newline: true,
-            output: '-' 
+            output: '-',
+            noCacheDir: true,
+            noPart: true, // No crear archivos temporales, flujo directo
+            ffmpegLocation: isWin ? undefined : '/usr/bin/ffmpeg' // Ayuda a Linux a hallar FFmpeg
         };
 
         if (isAudio) {
@@ -66,18 +69,22 @@ app.post('/api/download', async (req, res) => {
             flags.audioFormat = 'mp3';
         }
 
-        // OPCIONES DE LIBRERÍA: Aquí es donde va el executablePath
         const subprocess = youtubedl.exec(cleanUrl, flags, {
             executablePath: ytdlpPath 
         });
 
+        // Configuración de cabeceras para la descarga
         res.header('Content-Disposition', `attachment; filename="download.${extension}"`);
         res.header('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
 
+        // Canalización de la salida estándar al cliente
         subprocess.stdout.pipe(res);
 
+        // Captura de errores y progreso
         subprocess.stderr.on('data', (data) => {
             const output = data.toString();
+            console.log(`[YT-DLP LOG]: ${output}`); // Esto saldrá en los logs de Render
+            
             if (output.includes('%')) {
                 const match = output.match(/(\d+\.\d+)%/);
                 if (match) downloadStatus.progreso = match[1];
@@ -87,6 +94,12 @@ app.post('/api/download', async (req, res) => {
         subprocess.on('close', (code) => {
             downloadStatus.activo = false;
             downloadStatus.mensaje = code === 0 ? "Finalizado" : "Error";
+            console.log(`Proceso finalizado con código: ${code}`);
+        });
+
+        // Manejo de cierre inesperado de la conexión por parte del usuario
+        req.on('close', () => {
+            subprocess.kill();
         });
 
     } catch (err) {
@@ -96,7 +109,7 @@ app.post('/api/download', async (req, res) => {
     }
 });
 
-// --- PASO 2: CATCH-ALL PARA ANGULAR (Compatible con Node v24) ---
+// --- PASO 2: CATCH-ALL PARA ANGULAR ---
 app.use((req, res) => {
     const indexPath = path.join(distPath, 'index.html');
     if (!req.url.startsWith('/api')) {
@@ -109,5 +122,4 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Servidor corriendo en el puerto ${PORT}`);
-    console.log(`Buscando Angular en: ${distPath}`);
 });
