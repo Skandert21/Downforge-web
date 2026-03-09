@@ -1,0 +1,4 @@
+node_modules
+bin/*.exe
+.env
+dist/*/browser/*.map
